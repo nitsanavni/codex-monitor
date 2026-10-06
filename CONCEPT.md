@@ -6,7 +6,7 @@ A detached helper runs a command and sends its output to the current conversatio
 command → detached helper → local App Server → current Codex thread
 ```
 
-Tested on Linux with Codex CLI 0.160.0: output joined an active turn at a continuation point; delivery to an idle thread started a new turn. Check compatibility with a harmless demo before relying on another version. An in-flight tool call need not be interrupted immediately.
+Tested on Linux with Codex CLI 0.160.0 and on macOS with 0.160.1: output joined an active turn at a continuation point; delivery to an idle thread started a new turn. Check compatibility with a harmless demo before relying on another version. An in-flight tool call need not be interrupted immediately.
 
 ## Recipe for another Codex agent
 

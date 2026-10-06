@@ -8,7 +8,7 @@ export const TERMINAL: ReadonlySet<Phase> = new Set(["exited", "stopped", "faile
 
 export interface ProcRef {
   pid: number;
-  /** /proc/<pid>/stat starttime: distinguishes a reused pid. */
+  /** Process start identity: /proc ticks on Linux, ps start date on macOS. */
   start: string;
 }
 
@@ -95,6 +95,16 @@ export function loadAll(root: string): Loaded[] {
 }
 
 function procStat(pid: number): { state: string; start: string } | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return null;
+  if (process.platform === "darwin") {
+    const result = Bun.spawnSync(["/bin/ps", "-p", String(pid), "-o", "lstart=", "-o", "stat="], {
+      timeout: 2000,
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    });
+    if (result.exitCode !== 0) return null;
+    const match = result.stdout.toString().trim().match(/^(.+?)\s+(\S+)$/);
+    return match ? { state: match[2][0], start: `ps:${match[1].replace(/\s+/g, " ")}` } : null;
+  }
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -123,7 +133,7 @@ export function isAlive(ref: ProcRef | null): boolean {
 
 /**
  * Whether signalling the recorded process group is safe and useful. The group
- * id is the recorded leader's pid. While any member lives, Linux does not hand
+ * id is the recorded leader's pid. While any member lives, the OS does not hand
  * that number to a new process; if the number now belongs to a different
  * process, the group may be someone else's, so it is left alone.
  */
@@ -131,6 +141,15 @@ export function groupSignalable(ref: ProcRef | null): boolean {
   if (ref === null || ref.pid <= 1) return false;
   const start = procStart(ref.pid);
   if (start !== null && start !== ref.start) return false;
+  // A failed identity lookup must not grant permission to signal a live PID.
+  if (start === null) {
+    try {
+      process.kill(ref.pid, 0);
+      return false;
+    } catch (error: any) {
+      if (error.code !== "ESRCH") return false;
+    }
+  }
   try {
     process.kill(-ref.pid, 0);
     return true;

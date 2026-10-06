@@ -14,7 +14,7 @@ Want the principles without installing the tool? Read [the concept and protocol]
 
 ## Install
 
-Requires Linux, Bash, Bun 1.4+, and an interactive Codex CLI session with its local App Server running. Tested with Codex CLI 0.160.0/0.160.1; this integration uses an experimental API and may change.
+Requires Linux or macOS, Bash, Bun 1.4+, and an interactive Codex CLI session with its local App Server running. Tested with Codex CLI 0.160.0/0.160.1; this integration uses an experimental API and may change.
 
 ```bash
 git clone https://github.com/nitsanavni/codex-monitor.git
@@ -34,7 +34,7 @@ monitor 'tail -n 0 -F transcript.txt'
 monitor 'inotifywait -m -e close_write --format "%w%f" draft.md | while IFS= read -r file; do cat -- "$file"; done'
 ```
 
-The file-pairing example requires `inotifywait` and watches saves to an existing file. Editors that replace files by rename may require watching the containing directory instead.
+The file-pairing example requires `inotifywait` (Linux); on macOS install `fswatch` (Homebrew) and use `fswatch -o draft.md | while read -r _; do cat draft.md; done`. Both watch saves to an existing file. Editors that replace files by rename may require watching the containing directory instead.
 
 Each command starts once, inherits the current directory and environment, and prints a monitor ID after attachment succeeds. Output arrives as `monitor_event` tool output; completion includes the exit code or signal. Idle conversations wake on delivery. Active turns receive updates at continuation points.
 
@@ -44,12 +44,12 @@ monitor status <id>
 monitor stop <id>
 ```
 
-Thread discovery uses `CODEX_THREAD_ID`; socket discovery uses `codex app-server daemon version`. Missing or unloaded targets are refused before execution. Under Claude Code, the tool tells Claude to use its native Monitor tool.
+Thread discovery uses `CODEX_THREAD_ID`; socket discovery uses `codex app-server daemon version`. Missing or unloaded targets are refused before execution. While running, the helper checks every 30 seconds (`--heartbeat`) that the conversation is still loaded; when it is closed, the command is stopped, so a quiet watch does not outlive its conversation. The App Server drops a closed conversation's thread after a short delay (about 40 seconds in testing); output arriving within that window can still start a turn there. Under Claude Code, the tool tells Claude to use its native Monitor tool.
 
 Optional controls:
 
 ```bash
-monitor start --interval 2 --grace 3 'your command'
+monitor start --interval 2 --grace 3 --heartbeat 60 'your command'
 monitor --help
 ```
 

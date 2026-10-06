@@ -7,5 +7,5 @@
   "bin": { "monitor": "./monitor" },
   "scripts": { "test": "bun test --timeout 30000" },
   "engines": { "bun": ">=1.4.0" },
-  "os": ["linux"]
+  "os": ["linux", "darwin"]
 }

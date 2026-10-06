@@ -30,7 +30,7 @@ import {
 const USAGE = `monitor — stream a background command's output into this Codex conversation
 
   monitor '<bash command>'
-  monitor start [--interval S] [--grace S] [--rpc-timeout S] [--thread ID] [--socket PATH] '<bash command>'
+  monitor start [--interval S] [--grace S] [--heartbeat S] [--rpc-timeout S] [--thread ID] [--socket PATH] '<bash command>'
   monitor list [--all] [--json]
   monitor status <id> [--json]
   monitor stop <id>
@@ -38,7 +38,8 @@ const USAGE = `monitor — stream a background command's output into this Codex 
 start runs the command once, detached, in the current directory, and prints its
 id. Output arrives in this conversation as monitor_event tool output, batched at
 most every --interval seconds (default 5), followed by one final event with the
-exit status. The target is $CODEX_THREAD_ID unless --thread is given; the App
+exit status. Every --heartbeat seconds (default 30) the runner confirms the
+conversation is still loaded; once it is gone, the command is stopped. The target is $CODEX_THREAD_ID unless --thread is given; the App
 Server socket comes from \`codex app-server daemon version\` unless --socket is.
 State: --state-dir, else $CODEX_MONITOR_STATE_DIR, else $XDG_STATE_HOME/codex-monitor.`;
 
@@ -58,7 +59,7 @@ interface Parsed {
   bools: Set<string>;
 }
 
-const VALUE_FLAGS = new Set(["thread", "socket", "interval", "grace", "state-dir", "rpc-timeout"]);
+const VALUE_FLAGS = new Set(["thread", "socket", "interval", "grace", "heartbeat", "state-dir", "rpc-timeout"]);
 const BOOL_FLAGS = new Set(["all", "json", "help"]);
 
 function parse(argv: string[], stopAtFirstPositional: boolean): Parsed {
@@ -131,7 +132,7 @@ function discoverSocket(): string {
 }
 
 async function start(p: Parsed): Promise<number> {
-  if (process.platform !== "linux") throw new Error("monitor currently supports Linux only");
+  if (process.platform !== "linux" && process.platform !== "darwin") throw new Error("monitor supports Linux and macOS");
   if (p.positional.length !== 1) throw new UsageError("pass one quoted Bash command");
   const command = p.positional[0].trim();
   if (!command) throw new UsageError("start needs a command");
@@ -139,6 +140,7 @@ async function start(p: Parsed): Promise<number> {
   if (!threadId) throw new Error("no target thread: run inside a Codex session (CODEX_THREAD_ID) or pass --thread");
   const intervalMs = seconds(p, "interval", 5, 0.1);
   const graceMs = seconds(p, "grace", 5, 0);
+  const heartbeatMs = seconds(p, "heartbeat", 30, 0.1);
   const rpcTimeoutMs = seconds(p, "rpc-timeout", 30, 0.1);
 
   const socketPath = p.flags.socket ?? discoverSocket();
@@ -163,6 +165,7 @@ async function start(p: Parsed): Promise<number> {
     strict: true,
     intervalMs,
     graceMs,
+    heartbeatMs,
     rpcTimeoutMs,
   };
   const logFd = openSync(join(dir, "runner.log"), "a", 0o600);

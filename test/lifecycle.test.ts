@@ -3,6 +3,7 @@
  * real child processes, against a WebSocket JSON-RPC mock on a Unix socket.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { procRef } from "../src/state";
@@ -64,6 +65,7 @@ describe("start", () => {
     setup();
     const desc = join(ctx.work, "closed-output.pid");
     await startOk(`bash -c 'trap "" TERM; echo $$ > "${desc}"; exec sleep 300' >/dev/null 2>&1 & while [ ! -s "${desc}" ]; do sleep 0.01; done`, { flags: ["--grace", "0.1"] });
+    await waitUntil(() => existsSync(desc) && readFileSync(desc, "utf8").trim() !== "", 5000, "descendant pid");
     const pid = Number(readFileSync(desc, "utf8").trim());
     extraPids.push(pid);
     await mock.waitFor(terminal(A));
@@ -75,7 +77,7 @@ describe("start", () => {
     const env = baseEnv(ctx, { CODEX_THREAD_ID: A });
     // The caller pipes start's output (as Codex's redaction wrapper does) and is
     // then killed together with its whole process group (turn end).
-    const script = `t0=$(date +%s%N); ${JSON.stringify(BIN)} start --socket ${JSON.stringify(mock.socketPath)} --interval 0.2 'sleep 1.5; echo late' 2>&1 | cat; echo "ms=$(( ($(date +%s%N)-t0)/1000000 ))"; echo READY; sleep 60`;
+    const script = `t0=$(bun -e 'console.log(Date.now())'); ${JSON.stringify(BIN)} start --socket ${JSON.stringify(mock.socketPath)} --interval 0.2 'sleep 1.5; echo late' 2>&1 | cat; echo "ms=$(( $(bun -e 'console.log(Date.now())')-t0 ))"; echo READY; sleep 60`;
     const { child, ready } = spawnSession(script, env, ctx.work, "READY");
     extraPids.push(child.pid!);
     const out = await ready;
@@ -125,9 +127,9 @@ describe("start", () => {
 
   test("runs in the caller's working directory", async () => {
     setup();
-    await startOk("pwd");
+    await startOk("printf 'cwd: %s\\n' \"$PWD\"");
     await mock.waitFor(terminal(A));
-    expect(allText(mock.events(A), "stdout")).toBe(`${ctx.work}\n`);
+    expect(allText(mock.events(A), "stdout")).toBe(`cwd: ${ctx.work}\n`);
   });
 
   test("uses the same request shape for active and idle targets and routes by thread", async () => {
@@ -187,7 +189,7 @@ test("a multi-line command is listed on one line", async () => {
 test("an exit is reported even when processes outside the group keep the output open", async () => {
   setup();
   const bg = join(ctx.work, "bg.pid");
-  const id = await startOk(`echo hi; setsid sleep 60 & echo $! > ${bg}; exit 4`, { flags: ["--grace", "0.5"] });
+  const id = await startOk(`echo hi; bun "${join(import.meta.dir, "detach.ts")}" "${bg}"; exit 4`, { flags: ["--grace", "0.5"] });
   await waitUntil(() => existsSync(bg) && readFileSync(bg, "utf8").trim() !== "", 10_000, "background pid");
   const bgPid = Number(readFileSync(bg, "utf8").trim());
   extraPids.push(bgPid);
@@ -338,6 +340,19 @@ describe("delivery failures stop the owned command and are visible", () => {
     await waitUntil(() => !alive(st.child.pid), 10_000, "command stopped");
   });
 
+  test("a quiet command is stopped once its thread is unloaded", async () => {
+    setup();
+    const id = await startOk("sleep 300", { flags: ["--heartbeat", "0.3"] });
+    await Bun.sleep(1000);
+    expect(readState(ctx, id).phase).toBe("running");
+    mock.setThread(A, "notLoaded");
+    await waitUntil(() => readState(ctx, id).phase === "failed", 10_000, "failed phase");
+    const st = readState(ctx, id);
+    expect(st.delivery.error).toMatch(/heartbeat: .*is notLoaded/);
+    expect(mock.turnStarts()).toHaveLength(0);
+    await waitUntil(() => !alive(st.child.pid), 10_000, "command stopped");
+  });
+
   test("a crashed runner reads as lost, and stop still reaps its process group", async () => {
     setup();
     const { id, descPid } = await descendantCommand();
@@ -439,7 +454,7 @@ describe("stop", () => {
   test("reaps a command the runner started after stop first read the record", async () => {
     setup();
     // Stands in for the command's process group leader.
-    const command = Bun.spawn(["setsid", "sleep", "60"]);
+    const command = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
     extraPids.push(command.pid);
     const dir = join(ctx.stateDir, "mon-late");
     mkdirSync(dir, { recursive: true });
@@ -475,7 +490,7 @@ describe("stop", () => {
   test("never signals a process that merely reuses a recorded pid", async () => {
     setup();
     // A group leader, so a missing identity check would reach it via kill(-pid).
-    const bystander = Bun.spawn(["setsid", "sleep", "60"]);
+    const bystander = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
     extraPids.push(bystander.pid);
     const dir = join(ctx.stateDir, "mon-reused");
     mkdirSync(dir, { recursive: true });
@@ -491,7 +506,7 @@ describe("stop", () => {
     expect(r.code).toBe(0);
     await Bun.sleep(300);
     expect(alive(bystander.pid)).toBe(true);
-    expect(Number(readFileSync(`/proc/${bystander.pid}/stat`, "utf8").split(") ")[1].split(" ")[2])).toBe(bystander.pid);
+    expect(Number(Bun.spawnSync(["ps", "-p", String(bystander.pid), "-o", "pgid="]).stdout.toString().trim())).toBe(bystander.pid);
   });
 
   test("corrupt state is reported, not treated as healthy", async () => {

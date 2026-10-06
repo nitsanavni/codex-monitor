@@ -5,7 +5,8 @@
  *
  * Order: connect + check the target thread, then spawn the command once, then
  * report ready. Output is redacted per stream, batched, and delivered as
- * standalone `turn/start` tool output. Any delivery failure stops the command.
+ * standalone `turn/start` tool output. Any delivery failure stops the command,
+ * and so does a heartbeat that finds the target thread no longer loaded.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, renameSync, statSync, writeSync } from "node:fs";
@@ -26,6 +27,7 @@ export interface RunnerSpec {
   strict: boolean;
   intervalMs: number;
   graceMs: number;
+  heartbeatMs: number;
   rpcTimeoutMs: number;
 }
 
@@ -177,6 +179,7 @@ async function main(): Promise<void> {
   let seq = 0;
   let lastSent = 0;
   let flushTimer: Timer | null = null;
+  let heartbeat: Timer | null = null;
   let chain: Promise<void> = Promise.resolve();
   let failed = false;
   let finishing = false;
@@ -210,6 +213,7 @@ async function main(): Promise<void> {
     if (failed) return;
     failed = true;
     if (flushTimer) clearTimeout(flushTimer);
+    if (heartbeat) clearInterval(heartbeat);
     state.delivery.error = scrub(reason);
     save();
     terminate();
@@ -286,6 +290,7 @@ async function main(): Promise<void> {
     if (!leaderExit || !ended.stdout || !ended.stderr) return;
     finishing = true;
     if (flushTimer) clearTimeout(flushTimer);
+    if (heartbeat) clearInterval(heartbeat);
     // Closed pipes do not prove all descendants exited. Retain escalation
     // until the group is gone, including children that ignore TERM.
     if (groupSignalable(state.child)) {
@@ -348,6 +353,19 @@ async function main(): Promise<void> {
     }, DRAIN_MS);
     void finish();
   });
+
+  // A quiet command never delivers, so without this a watch would outlive its
+  // conversation. Serialized with deliveries so they never overlap.
+  heartbeat = setInterval(() => {
+    chain = chain.then(async () => {
+      if (failed || finishing) return;
+      try {
+        await checkTarget(client, spec.threadId, spec.rpcTimeoutMs);
+      } catch (e) {
+        await fail(`heartbeat: ${(e as Error).message}`);
+      }
+    });
+  }, spec.heartbeatMs);
 
   client.onClose((reason) => void fail(`App Server disconnected: ${reason}`));
   onTerm = () => {

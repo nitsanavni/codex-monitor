@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -13,8 +13,9 @@ export interface Ctx {
 }
 
 export function makeCtx(): Ctx {
-  // Keep paths short for AF_UNIX; tests accept TMPDIR for disk-backed storage.
-  const dir = mkdtempSync(join(tmpdir(), "mon-"));
+  // Keep paths short for AF_UNIX (macOS's TMPDIR is too long); resolve /tmp's
+  // symlink on macOS so paths match the command's $PWD.
+  const dir = mkdtempSync(join(realpathSync("/tmp"), "mon-"));
   const stateDir = join(dir, "state");
   const work = join(dir, "work");
   Bun.spawnSync(["mkdir", "-p", stateDir, work]);
@@ -56,6 +57,10 @@ export function alive(pid: number): boolean {
     return false;
   }
   // A zombie still answers signal 0; treat it as dead.
+  if (process.platform === "darwin") {
+    const ps = Bun.spawnSync(["/bin/ps", "-p", String(pid), "-o", "stat="]);
+    return ps.exitCode === 0 && !ps.stdout.toString().trim().startsWith("Z");
+  }
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
