@@ -2,8 +2,6 @@
 
 Modeled on **Claude Code's [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool)**: run a command in the background and receive its output in your current Codex conversation while you keep working.
 
-Why this matters, and the working patterns it enables: [patterns of working with AI - Monitor](https://nitsanavni.com/patterns-of-working-with-ai-monitor/).
-
 I like this pattern because it supports several useful ways of working with AI agents:
 
 - **Session notes:** keep the agent up to date as notes are appended.
