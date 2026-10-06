@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { redactSecrets } from "./secrets";
 import { AmbiguousError, AppServerClient, checkTarget, handshakeTimeout, RpcError } from "./app-server";
 import { StreamRedactor } from "./redact";
-import { procRef, signalGroup, writeState, type MonitorState } from "./state";
+import { groupSignalable, procRef, signalGroup, writeState, type MonitorState } from "./state";
 
 export interface RunnerSpec {
   id: string;
@@ -188,10 +188,10 @@ async function main(): Promise<void> {
   const log = (text: string) => {
     try {
       if (statSync(logPath).size > LOG_ROTATE_BYTES) renameSync(logPath, logPath + ".1");
-    } catch {}
-    try {
-      appendFileSync(logPath, text, { mode: 0o600 });
-    } catch {}
+    } catch (e: any) {
+      if (e.code !== "ENOENT") throw e;
+    }
+    appendFileSync(logPath, text, { mode: 0o600 });
   };
 
   const accept = (stream: StreamName, text: string) => {
@@ -286,6 +286,14 @@ async function main(): Promise<void> {
     if (!leaderExit || !ended.stdout || !ended.stderr) return;
     finishing = true;
     if (flushTimer) clearTimeout(flushTimer);
+    // Closed pipes do not prove all descendants exited. Retain escalation
+    // until the group is gone, including children that ignore TERM.
+    if (groupSignalable(state.child)) {
+      terminate();
+      const deadline = Date.now() + spec.graceMs;
+      while (groupSignalable(state.child) && Date.now() < deadline) await Bun.sleep(25);
+      signalGroup(state.child, "SIGKILL");
+    }
     if (killTimer) clearTimeout(killTimer);
     await enqueue(true);
     if (failed) return;

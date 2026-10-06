@@ -1,5 +1,5 @@
 /**
- * End-to-end: the real `tools/bin/monitor` CLI, the real detached runner and
+ * End-to-end: the real CLI, the real detached runner and
  * real child processes, against a WebSocket JSON-RPC mock on a Unix socket.
  */
 import { afterEach, describe, expect, test } from "bun:test";
@@ -43,6 +43,33 @@ async function startOk(command: string, opts: { thread?: string; flags?: string[
 }
 
 describe("start", () => {
+  test("accepts one quoted command without the start subcommand", async () => {
+    setup();
+    const r = await run(["--socket", mock.socketPath, "printf 'shortcut works\\n'"], baseEnv(ctx, { CODEX_THREAD_ID: A }), ctx.work);
+    expect(r.code).toBe(0);
+    await mock.waitFor(terminal(A));
+    expect(allText(mock.events(A))).toBe("shortcut works\n");
+  });
+
+  test("the shortcut also redirects Claude before executing anything", async () => {
+    setup();
+    const r = await run(["touch should-not-exist"], baseEnv(ctx, { CLAUDECODE: "1", CODEX_THREAD_ID: A }), ctx.work);
+    expect(r.code).toBe(3);
+    expect(r.stderr).toContain("native Monitor");
+    expect(existsSync(join(ctx.work, "should-not-exist"))).toBe(false);
+    expect(mock.connections()).toBe(0);
+  });
+
+  test("cleans up descendants even when they close output and ignore TERM", async () => {
+    setup();
+    const desc = join(ctx.work, "closed-output.pid");
+    await startOk(`bash -c 'trap "" TERM; echo $$ > "${desc}"; exec sleep 300' >/dev/null 2>&1 & while [ ! -s "${desc}" ]; do sleep 0.01; done`, { flags: ["--grace", "0.1"] });
+    const pid = Number(readFileSync(desc, "utf8").trim());
+    extraPids.push(pid);
+    await mock.waitFor(terminal(A));
+    await waitUntil(() => !alive(pid), 2000, "descendant cleanup");
+  });
+
   test("prints only the id, after attachment, and survives the caller's process group", async () => {
     setup();
     const env = baseEnv(ctx, { CODEX_THREAD_ID: A });

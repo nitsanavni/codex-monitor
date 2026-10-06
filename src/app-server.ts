@@ -72,6 +72,11 @@ export class AppServerClient {
   }
 
   onClose(listener: (reason: string) => void): void {
+    if (this.closedReason) {
+      const reason = this.closedReason;
+      queueMicrotask(() => listener(reason));
+      return;
+    }
     this.closeListeners.push(listener);
   }
 
